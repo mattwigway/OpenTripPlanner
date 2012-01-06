@@ -39,6 +39,7 @@ import org.opentripplanner.routing.core.GraphBuilderAnnotation;
 import org.opentripplanner.routing.core.GraphBuilderAnnotation.Variety;
 import org.opentripplanner.routing.edgetype.EndpointVertex;
 import org.opentripplanner.routing.edgetype.PlainStreetEdge;
+import org.opentripplanner.routing.edgetype.ElevatorEdge;
 import org.opentripplanner.routing.edgetype.StreetTraversalPermission;
 import org.opentripplanner.routing.impl.DistanceLibrary;
 import org.opentripplanner.routing.patch.Alert;
@@ -237,8 +238,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     /* generate endpoints */
                     if (startEndpoint == null) {
                         // first iteration on this way
-                        String label = "osm node " + osmStartNode.getId();
 
+			String label = getVertexLabelFromNode(osmStartNode, way);
                         startEndpoint = graph.getVertex(label);
                         if (startEndpoint == null) {
                             Coordinate coordinate = getCoordinate(osmStartNode);
@@ -251,7 +252,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         startEndpoint = endEndpoint;
                     }
 
-                    String label = "osm node " + osmEndNode.getId();
+		    String label = getVertexLabelFromNode(osmStartNode, way);
                     endEndpoint = graph.getVertex(label);
                     if (endEndpoint == null) {
                         Coordinate coordinate = getCoordinate(osmEndNode);
@@ -842,5 +843,43 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 
     public void setCustomNamer(CustomNamer customNamer) {
         this.customNamer = customNamer;
+    }
+
+    /**
+     * Get a vertex label from a node and a way. The reason this has been abstracted is that
+     * the vertex label is "osm node x" except when there is an elevator or other
+     * Z-dimension discontinuity, when it is "osm node x_y", with y representing the
+     * OSM level or layer (level preferred).
+     * @param {OSMNode} node The node to fetch a label for.
+     * @param {OSMWay} way The way it is connected to (for fetching level information).
+     * @returns {String} label The label for the graph vertex.
+     * @author mattwigway
+     */
+    private String getVertexLabelFromNode (OSMNode node, OSMWay way) {
+	String label;
+
+	// If the node is an elevator, append
+	// the _level or _layer (preferring level) to the node.
+	if (node.hasTag("highway") && "elevator".equals(node.getTag("highway"))) {
+
+	    if (way.hasTag("level")) {
+		label = "osm node " + node.getId() + "_" +
+		    way.getTag("level");
+
+	    } else if (way.hasTag("layer")) {
+		label = "osm node " + node.getId() + "_" +
+		    way.getTag("layer");
+
+	    } else {
+		// assume it's ground level
+		label = "osm node " + node.getId() + "_0";
+	    }	
+	    
+	} else {
+	    // assume all other ways are connected if they share a node
+	    label = "osm node " + node.getId();
+	}
+
+	return label;
     }
 }
