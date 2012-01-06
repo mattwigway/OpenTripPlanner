@@ -240,6 +240,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         // first iteration on this way
 
 			String label = getVertexLabelFromNode(osmStartNode, way);
+			_log.info("processing start node " + label);
                         startEndpoint = graph.getVertex(label);
                         if (startEndpoint == null) {
                             Coordinate coordinate = getCoordinate(osmStartNode);
@@ -252,7 +253,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         startEndpoint = endEndpoint;
                     }
 
-		    String label = getVertexLabelFromNode(osmStartNode, way);
+		    String label = getVertexLabelFromNode(osmEndNode, way);
+		    _log.info("processing end node " + label);
                     endEndpoint = graph.getVertex(label);
                     if (endEndpoint == null) {
                         Coordinate coordinate = getCoordinate(osmEndNode);
@@ -845,6 +847,30 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
         this.customNamer = customNamer;
     }
 
+   /**
+    * Get the level of a particular way, using the level tag if available, falling back to the
+    * layer tag if level does not exist, and defaulting to 0 if nothing else works.
+    * @param {OSMWay} way The way to get the level for.
+    * @returns {Integer} level The level that this is at
+    * @author mattwigway
+    */
+    private Integer getWayLevel (OSMWay way) {
+	// TODO: What about levels like 0.5 or "Z" (both mentioned at
+	// http://wiki.openstreetmap.org/wiki/Levels
+	// Also, what will Java do with a range like 0;1? We should parse that to
+	// the lowest floor, I think.
+	if (way.hasTag("level")) {
+	    return Integer.parseInt(way.getTag("level"));
+	    
+	} else if (way.hasTag("layer")) {
+	    return Integer.parseInt(way.getTag("layer"));
+	    
+	} else {
+	    // assume it's ground level
+	    return 0;
+	}
+    }
+
     /**
      * Get a vertex label from a node and a way. The reason this has been abstracted is that
      * the vertex label is "osm node x" except when there is an elevator or other
@@ -861,20 +887,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 	// If the node is an elevator, append
 	// the _level or _layer (preferring level) to the node.
 	if (node.hasTag("highway") && "elevator".equals(node.getTag("highway"))) {
-
-	    if (way.hasTag("level")) {
-		label = "osm node " + node.getId() + "_" +
-		    way.getTag("level");
-
-	    } else if (way.hasTag("layer")) {
-		label = "osm node " + node.getId() + "_" +
-		    way.getTag("layer");
-
-	    } else {
-		// assume it's ground level
-		label = "osm node " + node.getId() + "_0";
-	    }	
-	    
+	    label = "osm node " + node.getId() + "_" + 
+		Integer.toString(getWayLevel(way));
 	} else {
 	    // assume all other ways are connected if they share a node
 	    label = "osm node " + node.getId();
