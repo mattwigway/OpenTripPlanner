@@ -20,6 +20,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.Iterator;
 
 import org.opentripplanner.common.StreetUtils;
@@ -154,6 +155,12 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
             // figure out which nodes that are actually intersections
             Set<Long> possibleIntersectionNodes = new HashSet<Long>();
             Set<Long> intersectionNodes = new HashSet<Long>();
+
+	    // store nodes which are decomposed to multiple nodes because they are elevators
+	    // later they will be iterated over to build ElevatorEdges between them
+	    // this stores the levels that each node is used at
+	    Map<Long, Set> multiLevelNodesLevels = new HashMap<Long, Set>();
+
             for (OSMWay way : _ways.values()) {
                 List<Long> nodes = way.getNodeRefs();
                 for (long node : nodes) {
@@ -240,7 +247,23 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         // first iteration on this way
 
 			String label = getVertexLabelFromNode(osmStartNode, way);
-			_log.info("processing start node " + label);
+
+			// is it a multi-level node (elevator) that should be decomposed to
+			// several coincident nodes?
+			// if it is, we need to write down each level that it is active at, so
+			// we can build edges.
+			if (isMultiLevelNode(osmStartNode)) {
+			    if (multiLevelNodesLevels.containsKey(osmStartNode.getId())) {
+				Set levels = multiLevelNodesLevels.get(osmStartNode.getId());
+				levels.add(getWayLevel(way));
+			    } else {
+				// we want them sorted ascending, use a TreeSet.
+				Set levels = new TreeSet<Integer>();
+				levels.add(getWayLevel(way));
+				multiLevelNodesLevels.put(osmStartNode.getId(), levels);
+			    }
+			}
+
                         startEndpoint = graph.getVertex(label);
                         if (startEndpoint == null) {
                             Coordinate coordinate = getCoordinate(osmStartNode);
@@ -254,7 +277,20 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     }
 
 		    String label = getVertexLabelFromNode(osmEndNode, way);
-		    _log.info("processing end node " + label);
+
+		    // TODO: avoid duplicating this code
+		    if (isMultiLevelNode(osmEndNode)) {
+			if (multiLevelNodesLevels.containsKey(osmEndNode.getId())) {
+			    Set levels = multiLevelNodesLevels.get(osmEndNode.getId());
+			    levels.add(getWayLevel(way));
+			} else {
+			    // we want them sorted ascending, use a TreeSet.
+			    Set levels = new TreeSet<Integer>();
+			    levels.add(getWayLevel(way));
+			    multiLevelNodesLevels.put(osmEndNode.getId(), levels);
+			}
+		    }
+
                     endEndpoint = graph.getVertex(label);
                     if (endEndpoint == null) {
                         Coordinate coordinate = getCoordinate(osmEndNode);
@@ -324,6 +360,28 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     osmStartNode = _nodes.get(startNode);
                 }
             }
+
+	    // build elevator edges
+	    for (Long nodeId : multiLevelNodesLevels.keySet()) {
+		OSMNode node = _nodes.get(nodeId);
+		// this allows skipping levels, e.g., an elevator that stops
+		// at floor 0, 2, 3, and 5.
+		// it's a TreeSet initially so that it stays sorted and so that 
+		// it can't contain duplicates. Converting to an Array allows us to
+		// subscript it so we can loop over it in twos. Assumedly, it will stay
+		// sorted when we convert it to an Array.
+		// The objects are Integers, but toArray returns Object[]
+		// TODO: #reviewthis
+		Object[] levels = multiLevelNodesLevels.get(nodeId).toArray();
+
+		// -1 because we loop over it two at a time
+		Integer levelSize = levels.length - 1;
+		
+		for (Integer i = 0; i < levelSize; i++) {
+		    _log.debug("building elevator edge on node " + nodeId + " from level " +
+			       levels[i] + " to level " + levels[i + 1]);
+		}
+	    }
 
             /* unify turn restrictions */
             Map<Edge, TurnRestriction> turnRestrictions = new HashMap<Edge, TurnRestriction>();
@@ -871,6 +929,22 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 	}
     }
 
+   /**
+    * Is this a multi-level node that should be decomposed to multiple coincident nodes?
+    * Currently returns true only for elevators.
+    * @param {OSMNode} node
+    * @returns {Boolean} isMultiLevel
+    * @author mattwigway
+    */
+    private boolean isMultiLevelNode(OSMNode node) {
+	if (node.hasTag("highway") && "elevator".equals(node.getTag("highway"))) {
+	    return true;
+	} else {
+	    return false;
+	}
+    }
+
+
     /**
      * Get a vertex label from a node and a way. The reason this has been abstracted is that
      * the vertex label is "osm node x" except when there is an elevator or other
@@ -884,9 +958,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
     private String getVertexLabelFromNode (OSMNode node, OSMWay way) {
 	String label;
 
-	// If the node is an elevator, append
-	// the _level or _layer (preferring level) to the node.
-	if (node.hasTag("highway") && "elevator".equals(node.getTag("highway"))) {
+	// If the node should be decomposed to multiple levels, append _level to the id
+	if (isMultiLevelNode(node)) {
 	    label = "osm node " + node.getId() + "_" + 
 		Integer.toString(getWayLevel(way));
 	} else {
