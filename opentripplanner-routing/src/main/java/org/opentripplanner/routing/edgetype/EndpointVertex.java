@@ -14,17 +14,23 @@
 package org.opentripplanner.routing.edgetype;
 
 import java.util.Map;
+import java.util.ArrayList;
 
 import org.opentripplanner.routing.core.Vertex;
 import org.opentripplanner.routing.core.Graph;
 import org.opentripplanner.routing.core.Edge;
+import org.opentripplanner.routing.core.DirectEdge;
 import org.opentripplanner.common.TurnRestriction;
 import org.opentripplanner.common.TurnRestrictionType;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Represents an ordinary location in space, typically an intersection */
 
 public class EndpointVertex extends Vertex {
+
+    private static Logger _log = LoggerFactory.getLogger(EndpointVertex.class);
 
     public EndpointVertex(String label, double x, double y, String name) {
         super(label, x, y, name);
@@ -41,12 +47,15 @@ public class EndpointVertex extends Vertex {
      * @param restrictions Turn restrictions.
      * @author mattwigway
      */
-    public void makeEdges (Graph graph, Map<Edge, TurnRestriction> restrictions) {
+    public ArrayList<DirectEdge> makeEdges (Graph graph, Map<Edge, TurnRestriction> restrictions) {
+	// this is what will be passed back to the caller to add to the graph later
+	ArrayList<DirectEdge> turns = new ArrayList<DirectEdge>();
+
 	// test to make sure we're working on our own graph
 	Vertex gv = graph.getVertex(getLabel());
 	
 	if (gv == null) {
-	    return; // the vertex could have been removed from endpoints
+	    return null; // the vertex could have been removed from endpoints
 	}
 	if (gv != this) {
 	    throw new IllegalStateException("Vertex in graph is not the same one at endpoint.");
@@ -54,6 +63,7 @@ public class EndpointVertex extends Vertex {
 
 	// nested loop to make TurnEdges from every incoming street to every outgoing one.
 	for (Edge eraw : getIncoming()) {
+
 	    // cast to StreetEdge to make sure we have makeVertex
 	    StreetEdge e = (StreetEdge) eraw;
 
@@ -67,7 +77,7 @@ public class EndpointVertex extends Vertex {
 		restriction = restrictions.get(e);
 	    }
 	    
-	    for (Edge e2raw : v1.getOutgoing()) {
+	    for (Edge e2raw : getOutgoing()) {
 		StreetEdge e2 = (StreetEdge) e2raw;
 
 		StreetVertex v2 = (StreetVertex) e2.makeVertex(graph);
@@ -87,10 +97,10 @@ public class EndpointVertex extends Vertex {
 			turn.setRestrictedModes(restriction.modes);
 		    }
 		}
-                    
+
 		// don't add turn edges from an edge to itself
 		if (v1 != v2 && !v1.getEdgeId().equals(v2.getEdgeId())) {
-		    graph.addEdge(turn);
+		    turns.add(turn);
 		    replaced = true;
 		}
 	    }
@@ -105,9 +115,11 @@ public class EndpointVertex extends Vertex {
 		 * eventually be changed.
 		 */
 		//e.setFromVertex(v1);
-		//graph.addEdge(e);
+		//turns.add(e);
 	    }
 	}
+
+	return turns;
     }
 
 

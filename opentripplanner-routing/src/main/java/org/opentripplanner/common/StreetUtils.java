@@ -53,6 +53,8 @@ public class StreetUtils {
 
         _log.debug("converting to edge-based graph");
         
+	ArrayList<DirectEdge> turns = new ArrayList<DirectEdge>();
+
 	// TODO: make this not dependent on EndpointVertex
 	// will require defining makeVertex on a superclass of some sort - either Vertex or a new
 	// one.
@@ -62,7 +64,9 @@ public class StreetUtils {
 	    // mattwigway 2012-01-07: most of the code that used to be here is in 
 	    // EndpointVertex.java now
 	    // makeEdges calls makeVertex on edges to convert them to the appropriate vertex type
-	    v.makeEdges(graph, restrictions);
+	    // TODO: is there a way to avoid passing things back, and let makeEdges make the
+	    // changes directly?
+	    turns.addAll(v.makeEdges(graph, restrictions));
 	}
 
         /* remove standard graph */
@@ -70,12 +74,10 @@ public class StreetUtils {
             graph.removeVertexAndEdges(v);
         }
 
-	// turns are now added directly
-	// is there a reason it is a bad idea to add turns as-we-go?
-        /* add turns 
+        /* add turns */
         for (DirectEdge e : turns) {
             graph.addEdge(e);
-	    } */
+	} 
     }
 
     public static void pruneFloatingIslands(Graph graph) {

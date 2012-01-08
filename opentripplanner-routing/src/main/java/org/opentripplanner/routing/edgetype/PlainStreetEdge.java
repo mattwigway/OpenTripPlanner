@@ -214,8 +214,6 @@ public class PlainStreetEdge extends AbstractEdge implements StreetEdge {
 	    v.setBogusName(hasBogusName());
 	    v.setNoThruTraffic(isNoThruTraffic());
 	    v.setStairs(isStairs());
-
-	    _log.debug("created vertex with coords " + v.getX() + " " + v.getY());
 	    
 	    graph.addVertex(v);
 	}

@@ -380,6 +380,19 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 		for (Integer i = 0; i < levelSize; i++) {
 		    _log.debug("building elevator edge on node " + nodeId + " from level " +
 			       levels[i] + " to level " + levels[i + 1]);
+
+		    // TODO: abstract label generation?
+		    String fromVertLabel = "osm node " + nodeId + "_" + levels[i];
+		    String toVertLabel   = "osm node " + nodeId + "_" + levels[i + 1];
+		    Vertex from = graph.getVertex(fromVertLabel);
+		    Vertex to   = graph.getVertex(toVertLabel);
+
+		    // for now, assume only walking is permitted.
+		    // TODO: if we assign bicycle, that generally mean you can ride.
+		    // how do we prevent the engine from walking bicycles in elevators?
+		    //ElevatorEdge theEdge = new ElevatorEdge(from, to, 
+		    //StreetTraversalPermission.PEDESTRIAN);
+		    //graph.addEdge(theEdge); // TODO: do I need a reverse-edge?
 		}
 	    }
 
