@@ -114,8 +114,17 @@ public class EndpointVertex extends Vertex {
 		 * This can and does have rather unpredictable behavior, and should 
 		 * eventually be changed.
 		 */
-		//e.setFromVertex(v1);
-		//turns.add(e);
+		if (e instanceof PlainStreetEdge) {
+		    PlainStreetEdge pse = (PlainStreetEdge) e;
+		    pse.setFromVertex(v1);
+		    turns.add(pse);
+		}
+		else {
+		    // should build a DirectEdge here
+		    _log.warn("Not resetting from vertex on edge " + e.toString() + 
+			      " because it is not an instance of PlainStreetEdge." +
+			      " Unpredictable behavior may result");
+		}
 	    }
 	}
 
