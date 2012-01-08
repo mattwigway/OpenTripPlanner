@@ -26,12 +26,16 @@ import org.opentripplanner.routing.core.StateEditor;
 import org.opentripplanner.routing.core.TraverseMode;
 import org.opentripplanner.routing.core.TraverseOptions;
 import org.opentripplanner.routing.core.Vertex;
+import org.opentripplanner.routing.core.Graph;
 import org.opentripplanner.routing.patch.Alert;
 import org.opentripplanner.routing.util.ElevationUtils;
 import org.opentripplanner.routing.util.SlopeCosts;
 
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.LineString;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This represents a street segment. This is unusual in an edge-based graph, but happens when we
@@ -41,6 +45,7 @@ import com.vividsolutions.jts.geom.LineString;
  * 
  */
 public class PlainStreetEdge extends AbstractEdge implements StreetEdge {
+    private static Logger _log = LoggerFactory.getLogger(PlainStreetEdge.class);
 
     private static final long serialVersionUID = 1L;
 
@@ -179,6 +184,44 @@ public class PlainStreetEdge extends AbstractEdge implements StreetEdge {
     @Override
     public String getName() {
         return name;
+    }
+
+    /**
+     * Convert this edge to a vertex. Migrated from StreetUtils to
+     * support multiple edge types. This should be called before calling makeEdges on
+     * vertices.
+     * @param graph the graph to modify or put into.
+     * @author mattwigway
+     */
+    @Override
+    public StreetVertex makeVertex (Graph graph) {
+	// first, make the StreetVertex itself
+        String id = getId();
+	// make sure it isn't duplicated
+        StreetVertex v;
+
+	v = (StreetVertex) graph.getVertex(id + (back ? " back" : ""));
+        if (v == null) {
+	    v = new StreetVertex(id, getGeometry(), getName(), getLength(), back, getNotes());
+	    
+	    v.setWheelchairAccessible(isWheelchairAccessible());
+	    v.setBicycleSafetyEffectiveLength(getBicycleSafetyEffectiveLength());
+	    v.setCrossable(isCrossable());
+	    v.setPermission(getPermission());
+	    v.setSlopeOverride(getSlopeOverride());
+	    v.setElevationProfile(getElevationProfile());
+	    v.setRoundabout(isRoundabout());
+	    v.setBogusName(hasBogusName());
+	    v.setNoThruTraffic(isNoThruTraffic());
+	    v.setStairs(isStairs());
+
+	    _log.debug("created vertex with coords " + v.getX() + " " + v.getY());
+	    
+	    graph.addVertex(v);
+	}
+	
+	// lastly, return
+	return v;
     }
 
     @Override

@@ -53,88 +53,30 @@ public class StreetUtils {
 
         _log.debug("converting to edge-based graph");
         
-        ArrayList<DirectEdge> turns = new ArrayList<DirectEdge>(endpoints.size());
-        
-        for (Vertex v : endpoints) {
-            Vertex gv = graph.getVertex(v.getLabel());
-            if (gv == null) {
-                continue; // the vertex could have been removed from endpoints
-            }
-            if (gv != v) {
-                throw new IllegalStateException("Vertex in graph is not the same one at endpoint."); 
-            }
-            for (Edge e : gv.getIncoming()) {
-                PlainStreetEdge pse = (PlainStreetEdge) e;
-                boolean replaced = false;
-                StreetVertex v1 = getStreetVertexForEdge(graph, pse);
-                TurnRestriction restriction = null;
-                if (restrictions != null) {
-                	restriction = restrictions.get(pse);
-                }
-                for (Edge e2 : v.getOutgoing()) {
-                    StreetVertex v2 = getStreetVertexForEdge(graph, (PlainStreetEdge) e2);
-                    
-                    TurnEdge turn = new TurnEdge(v1, v2);
-                    if (restriction != null) {
-                    	if (restriction.type == TurnRestrictionType.NO_TURN && restriction.to == e2) {
-                    	    turn.setRestrictedModes(restriction.modes);
-                    	} else if (restriction.type == TurnRestrictionType.ONLY_TURN && restriction.to != e2) {
-                            turn.setRestrictedModes(restriction.modes);
-                    	}
-                    }
-                    
-                    if (v1 != v2 && !v1.getEdgeId().equals(v2.getEdgeId())) {
-                        turns.add(turn);
-                        replaced = true;
-                    }
-                }
-                if (!replaced) {
-                    /*
-                     * NOTE that resetting the from-vertex only works because all of the 
-                     * endpoint vertices will soon have their edgelists reinitialized, and 
-                     * then all these edges will be re-added to the graph.
-                     * This can and does have rather unpredictable behavior, and should 
-                     * eventually be changed.
-                     */
-                    pse.setFromVertex(v1);
-                    turns.add(pse);
-                }
-            }
-        }
+	// TODO: make this not dependent on EndpointVertex
+	// will require defining makeVertex on a superclass of some sort - either Vertex or a new
+	// one.
+	for (Vertex vraw : endpoints) {
+	    EndpointVertex v = (EndpointVertex) vraw;
+
+	    // mattwigway 2012-01-07: most of the code that used to be here is in 
+	    // EndpointVertex.java now
+	    // makeEdges calls makeVertex on edges to convert them to the appropriate vertex type
+	    v.makeEdges(graph, restrictions);
+	}
+
         /* remove standard graph */
         for (Vertex v : endpoints) {
             graph.removeVertexAndEdges(v);
         }
-        /* add turns */
+
+	// turns are now added directly
+	// is there a reason it is a bad idea to add turns as-we-go?
+        /* add turns 
         for (DirectEdge e : turns) {
             graph.addEdge(e);
-        }
+	    } */
     }
-
-    private static StreetVertex getStreetVertexForEdge(Graph graph, PlainStreetEdge e) {
-        boolean back = e.back;
-        
-        String id = e.getId();
-        Vertex v = graph.getVertex(id + (back ? " back" : ""));
-        if (v != null) {
-            return (StreetVertex) v;
-        }
-
-        StreetVertex newv = new StreetVertex(id, e.getGeometry(), e.getName(), e.getLength(), back, e.getNotes());
-        newv.setWheelchairAccessible(e.isWheelchairAccessible());
-        newv.setBicycleSafetyEffectiveLength(e.getBicycleSafetyEffectiveLength());
-        newv.setCrossable(e.isCrossable());
-        newv.setPermission(e.getPermission());
-        newv.setSlopeOverride(e.getSlopeOverride());
-        newv.setElevationProfile(e.getElevationProfile());
-        newv.setRoundabout(e.isRoundabout());
-        newv.setBogusName(e.hasBogusName());
-        newv.setNoThruTraffic(e.isNoThruTraffic());
-        newv.setStairs(e.isStairs());
-        graph.addVertex(newv);
-        return newv;
-    }
-
 
     public static void pruneFloatingIslands(Graph graph) {
     	_log.debug("pruning");

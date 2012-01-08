@@ -15,11 +15,21 @@ package org.opentripplanner.routing.edgetype;
 
 import org.opentripplanner.routing.core.DirectEdge;
 import org.opentripplanner.routing.core.TraverseOptions;
+import org.opentripplanner.routing.core.Vertex;
+import org.opentripplanner.routing.core.Graph;
 
 /** Interface for edges representing streets */
 public interface StreetEdge extends EdgeWithElevation, DirectEdge {
     public boolean canTraverse(TraverseOptions options);
     public double getLength();
     public StreetTraversalPermission getPermission();
-	public boolean isNoThruTraffic();
+    public boolean isNoThruTraffic();
+    /**
+     * Make this edge into a vertex, and build any requisite edges to connect it to the
+     * rest of Graph graph, which may be either the graph which contains the edge currently
+     * or any other graph.
+     * @param graph
+     * @author mattwigway
+     */
+    public Vertex makeVertex(Graph graph);
 }
