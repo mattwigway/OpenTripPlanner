@@ -14,13 +14,19 @@
 package org.opentripplanner.graph_builder.impl.osm;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.Iterator;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.lang.NumberFormatException;
+import java.lang.ArrayIndexOutOfBoundsException;
 
 import org.opentripplanner.common.StreetUtils;
 import org.opentripplanner.common.TurnRestriction;
@@ -39,6 +45,10 @@ import org.opentripplanner.routing.core.GraphBuilderAnnotation;
 import org.opentripplanner.routing.core.GraphBuilderAnnotation.Variety;
 import org.opentripplanner.routing.edgetype.EndpointVertex;
 import org.opentripplanner.routing.edgetype.PlainStreetEdge;
+import org.opentripplanner.routing.edgetype.FreeEdge;
+import org.opentripplanner.routing.edgetype.ElevatorBoardEdge;
+import org.opentripplanner.routing.edgetype.ElevatorAlightEdge;
+import org.opentripplanner.routing.edgetype.ElevatorHopEdge;
 import org.opentripplanner.routing.edgetype.StreetTraversalPermission;
 import org.opentripplanner.routing.impl.DistanceLibrary;
 import org.opentripplanner.routing.patch.Alert;
@@ -66,6 +76,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 
     private CustomNamer customNamer;
 
+    private boolean noZeroLevels = true;
+
     /**
      * The source for OSM map data
      */
@@ -87,6 +99,14 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
      */
     public void setDefaultWayPropertySetSource(WayPropertySetSource source) {
         wayPropertySet = source.getWayPropertySet();
+    }
+
+    /**
+     * If true, disallow non-zero floors and add 1 to positive numeric floors, as is generally done
+     * in the United States. This does not affect floor names from level maps. Default: true.
+     */
+    public void setNoZeroLevels(boolean nz) {
+        noZeroLevels = nz;
     }
 
     @Override
@@ -123,25 +143,33 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
         private Map<Long, OSMNode> _nodes = new HashMap<Long, OSMNode>();
 
         private Map<Long, OSMWay> _ways = new HashMap<Long, OSMWay>();
-
+        
         private Map<Long, OSMRelation> _relations = new HashMap<Long, OSMRelation>();
-
+        
         private Set<Long> _nodesWithNeighbors = new HashSet<Long>();
-
-        private Map<Long, List<TurnRestrictionTag>> turnRestrictionsByFromWay = new HashMap<Long, List<TurnRestrictionTag>>();
-
-        private Map<Long, List<TurnRestrictionTag>> turnRestrictionsByToWay = new HashMap<Long, List<TurnRestrictionTag>>();
-
-        private Map<TurnRestrictionTag, TurnRestriction> turnRestrictionsByTag = new HashMap<TurnRestrictionTag, TurnRestriction>();
-
+        
+        private Map<Long, List<TurnRestrictionTag>> turnRestrictionsByFromWay = 
+            new HashMap<Long, List<TurnRestrictionTag>>();
+        
+        private Map<Long, List<TurnRestrictionTag>> turnRestrictionsByToWay = 
+            new HashMap<Long, List<TurnRestrictionTag>>();
+        
+        private Map<TurnRestrictionTag, TurnRestriction> turnRestrictionsByTag = 
+            new HashMap<TurnRestrictionTag, TurnRestriction>();
+        
         private Graph graph;
         
         /** The bike safety factor of the safest street */
         private double bestBikeSafety = 1;
 
+    // store nodes which are decomposed to multiple nodes because they are elevators
+    // later they will be iterated over to build ElevatorEdges between them
+    // this stores the levels that each node is used at
+    private HashMap<Long, HashMap> multiLevelNodesLevels = new HashMap<Long, HashMap>();    
+
         public void buildGraph(Graph graph) {
-        	this.graph = graph;
-        	
+            this.graph = graph;
+            
             // handle turn restrictions and road names in relations
             processRelations();
 
@@ -153,6 +181,11 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
             // figure out which nodes that are actually intersections
             Set<Long> possibleIntersectionNodes = new HashSet<Long>();
             Set<Long> intersectionNodes = new HashSet<Long>();
+
+            // store levels that cannot be parsed, and assign them a number
+            int nextUnparsedLevel = 10000;
+            HashMap<String, Integer> unparsedLevels = new HashMap<String, Integer>();
+            
             for (OSMWay way : _ways.values()) {
                 List<Long> nodes = way.getNodeRefs();
                 for (long node : nodes) {
@@ -164,10 +197,10 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 }
             }
             GeometryFactory geometryFactory = new GeometryFactory();
-
+            
             /* build an ordinary graph, which we will convert to an edge-based graph */
             ArrayList<Vertex> endpoints = new ArrayList<Vertex>();
-
+            
             for (OSMWay way : _ways.values()) {
 
                 if (wayIndex % 10000 == 0)
@@ -185,7 +218,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 Set<Alert> note = wayPropertySet.getNoteForWay(way);
 
                 StreetTraversalPermission permissions = getPermissionsForEntity(way,
-                        wayData.getPermission());
+                                                                                wayData.getPermission());
                 if (permissions == StreetTraversalPermission.NONE)
                     continue;
 
@@ -194,6 +227,100 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 Vertex startEndpoint = null, endEndpoint = null;
 
                 ArrayList<Coordinate> segmentCoordinates = new ArrayList<Coordinate>();
+
+                /* Here's how the otp:numeric_level tag works:
+                   levels that are sourced from a level map have their level number entered
+                   directly.
+                   levels that are sourced from a level tag have 1000 added to their level numbers,
+                   and then entered.
+                   levels that come from a layer tag have 2000 added and then entered.
+                   the fallback ground level is 3000.
+                   Levels that have an unparseable name, like Z, Subway or Middle Earth, are added
+                   to the unparsedLevels hash if not already there, and a new level defined for 
+                   them. These levels start at 10000.
+
+                   The reason for this is that it prevents a layer 1 from being equal to a level_map
+                   1, because they may not be. Worst case scenario, OTP will say "take elevator to
+                   level 1" when you're already on level 1.
+                */
+
+                // Parse levels, if it wasn't done in processRelations
+                if (way.hasTag("otp:numeric_level")) {
+                    // the tags were set in processRelations from a levelMap. Do nothing.
+                }
+                else if (way.hasTag("level")) {
+                    // TODO: floating-point levels &c.
+                    String level = way.getTag("level");
+                    int numLevel;
+                    try {
+                        numLevel = Integer.parseInt(level) + 1000;
+                        if (noZeroLevels && numLevel >= 1000) { // positive level, US
+                            // add 1, subract 1000
+                            level = "" + (numLevel - 999);
+                        }
+                    }
+                    catch (NumberFormatException e) {
+                        // get a unique level number for this
+                        if (unparsedLevels.containsKey(level)) {
+                            numLevel = unparsedLevels.get(level);
+                        }
+                        else {
+                            // make a new unique ID
+                            numLevel = nextUnparsedLevel;
+                            nextUnparsedLevel++;
+                            unparsedLevels.put(level, numLevel);
+                        }
+                        _log.warn("Could not determine ordinality of level " + level +
+                                  ". Elevators will work, but costing may be incorrect. " +
+                                  "a level map should be used in this situation.");
+                    }
+            
+                    way.addTag("otp:numeric_level", 
+                               Integer.toString(numLevel));
+                    way.addTag("otp:human_level", level);
+                } else if (way.hasTag("layer")) {
+                    String layer = way.getTag("layer");
+
+                    int numLayer;
+                    try {
+                        numLayer = Integer.parseInt(layer) + 2000;
+                        if (noZeroLevels && numLayer >= 2000) { // positive level, US
+                            // add 1 to the layer number but subract 2000
+                            // added above
+                            layer = "" + (numLayer - 1999);
+                        }
+                    }
+                    catch (NumberFormatException e) {
+                        // get a unique level number for this
+                        if (unparsedLevels.containsKey(layer)) {
+                            numLayer = unparsedLevels.get(layer);
+                        }
+                        else {
+                            // make a new unique ID
+                            numLayer = nextUnparsedLevel;
+                            nextUnparsedLevel++;
+                            unparsedLevels.put(layer, numLayer);
+                        }
+                        _log.warn("Could not determine ordinality of layer " + layer +
+                                  ". Elevators will work, but costing may be incorrect. " +
+                                  "A level map should be used in this situation.");
+                    }
+
+                    way.addTag("otp:numeric_level", 
+                               Integer.toString(numLayer));
+                    way.addTag("otp:human_level", layer);
+                } else {
+                    // assume it's ground level, but don't assume it's connected to any other
+                    // ground level
+                    way.addTag("otp:numeric_level", "3000");
+                    // 0 in a reasonable, 0-based nation, 1 in a (-inf, -1] U [1, inf) 
+                    // country like the US
+                    if (noZeroLevels) {
+                        way.addTag("otp:human_level", "1");
+                    } else {
+                        way.addTag("otp:human_level", "0");
+                    }
+                }
 
                 /*
                  * Traverse through all the nodes of this edge. For nodes which are not shared with
@@ -210,12 +337,12 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         osmStartNode = _nodes.get(startNode);
                     }
                     OSMNode osmEndNode = _nodes.get(endNode);
-
+            
                     if (osmStartNode == null || osmEndNode == null)
                         continue;
-
+            
                     LineString geometry;
-
+            
                     /*
                      * skip vertices that are not intersections, except that we use them for
                      * geometry
@@ -223,27 +350,36 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     if (segmentCoordinates.size() == 0) {
                         segmentCoordinates.add(getCoordinate(osmStartNode));
                     }
-
+            
                     if (intersectionNodes.contains(endNode) || i == nodes.size() - 2) {
                         segmentCoordinates.add(getCoordinate(osmEndNode));
                         geometry = geometryFactory.createLineString(segmentCoordinates
-                                .toArray(new Coordinate[0]));
+                                                                    .toArray(new Coordinate[0]));
                         segmentCoordinates.clear();
                     } else {
                         segmentCoordinates.add(getCoordinate(osmEndNode));
                         continue;
                     }
-
+            
                     /* generate endpoints */
                     if (startEndpoint == null) {
                         // first iteration on this way
-                        String label = "osm node " + osmStartNode.getId();
+                
+                        String label = getVertexLabelFromNode(osmStartNode, way);
+                
+                        // is it a multi-level node (elevator) that should be decomposed to
+                        // several coincident nodes?
+                        // if it is, we need to write down each level that it is active at, so
+                        // we can build edges.
+                        if (isMultiLevelNode(osmStartNode)) {
+                recordLevel(way, osmStartNode);
+                        }
 
                         startEndpoint = graph.getVertex(label);
                         if (startEndpoint == null) {
                             Coordinate coordinate = getCoordinate(osmStartNode);
                             startEndpoint = new EndpointVertex(label, coordinate.x, coordinate.y,
-                                    label);
+                                                               label);
                             graph.addVertex(startEndpoint);
                             endpoints.add(startEndpoint);
                         }
@@ -251,7 +387,12 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         startEndpoint = endEndpoint;
                     }
 
-                    String label = "osm node " + osmEndNode.getId();
+                    String label = getVertexLabelFromNode(osmEndNode, way);
+
+                    if (isMultiLevelNode(osmEndNode)) {
+            recordLevel(way, osmEndNode);
+                    }
+
                     endEndpoint = graph.getVertex(label);
                     if (endEndpoint == null) {
                         Coordinate coordinate = getCoordinate(osmEndNode);
@@ -261,7 +402,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     }
 
                     P2<PlainStreetEdge> streets = getEdgesForStreet(startEndpoint, endEndpoint,
-                            way, i, permissions, geometry);
+                                                                    way, i, permissions, geometry);
 
                     PlainStreetEdge street = streets.getFirst();
 
@@ -291,8 +432,9 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                     }
 
                     /* Check if there are turn restrictions starting on this segment */
-                    List<TurnRestrictionTag> restrictionTags = turnRestrictionsByFromWay.get(way
-                            .getId());
+                    List<TurnRestrictionTag> restrictionTags = 
+                        turnRestrictionsByFromWay.get(way.getId());
+
                     if (restrictionTags != null) {
                         for (TurnRestrictionTag tag : restrictionTags) {
                             if (tag.via == startNode) {
@@ -322,6 +464,113 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 }
             }
 
+            // build elevator edges
+            for (Long nodeId : multiLevelNodesLevels.keySet()) {
+                OSMNode node = _nodes.get(nodeId);
+                // this allows skipping levels, e.g., an elevator that stops
+                // at floor 0, 2, 3, and 5.
+                // it's a TreeSet initially so that it stays sorted and so that 
+                // it can't contain duplicates. Converting to an Array allows us to
+                // subscript it so we can loop over it in twos. Assumedly, it will stay
+                // sorted when we convert it to an Array.
+                // The objects are Integers, but toArray returns Object[]
+                HashMap<Integer, String> levels = multiLevelNodesLevels.get(nodeId);
+
+                /* first, build FreeEdges to disconnect from the graph,
+                   GenericVertices to serve as attachment points,
+                   and ElevatorBoard and ElevatorAlight edges
+                   to connect future ElevatorHop edges to.
+                   After this iteration, graph will look like (side view):
+                   +==+~~X
+           
+                   +==+~~X
+           
+                   +==+~~X
+                   + GenericVertex, X EndpointVertex, ~~ FreeEdge, == ElevatorBoardEdge/
+                   ElevatorAlightEdge
+                   the next iteration will fill in the ElevatorHopEdges.
+                */
+
+                ArrayList<Vertex> onboardVertices = new ArrayList<Vertex>();
+
+                Integer[] levelKeys = levels.keySet().toArray(new Integer[0]);
+                Arrays.sort(levelKeys);
+
+                for (Integer level : levelKeys) {
+                    // get the source node to hang all this stuff off of.
+                    String humanLevel = levels.get(level);
+                    String sourceVertLabel = "osm node " + nodeId + "_" + level;
+                    EndpointVertex sourceVert = 
+                        (EndpointVertex) graph.getVertex(sourceVertLabel);
+            
+                    // create a Vertex to connect the FreeNode to.
+                    Vertex middleVert = new Vertex(sourceVertLabel + "_middle", 
+                                                   sourceVert.getX(), sourceVert.getY());
+                    graph.addVertex(middleVert);
+
+                    // I am of the understanding that edges are unidirectional
+                    FreeEdge free = new FreeEdge(sourceVert, middleVert);
+                    FreeEdge back = new FreeEdge(middleVert, sourceVert);
+                    graph.addEdge(free);
+                    graph.addEdge(back);
+
+                    // Create a vertex to connect the ElevatorAlight, ElevatorBoard, and ElevatorHop
+                    // edges to.
+                    Vertex onboardVert = new Vertex(sourceVertLabel + "_onboard",
+                                                    sourceVert.getX(), sourceVert.getY());
+                    graph.addVertex(onboardVert);
+
+                    ElevatorBoardEdge board = new ElevatorBoardEdge(middleVert, onboardVert);
+                    graph.addEdge(board);
+
+                    ElevatorAlightEdge alight = new ElevatorAlightEdge(onboardVert, middleVert, 
+                                                                       humanLevel);
+                    graph.addEdge(alight);
+
+                    // add it to the array so it can be connected later
+                    onboardVertices.add(onboardVert);
+                }
+
+                // 
+
+
+                // -1 because we loop over it two at a time
+                Integer vSize = onboardVertices.size() - 1;
+        
+                for (Integer i = 0; i < vSize; i++) {
+                    Vertex from = onboardVertices.get(i);
+                    Vertex to   = onboardVertices.get(i + 1);
+            
+                    StreetTraversalPermission permission = 
+                        StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE;
+
+                    // default true
+                    boolean wheelchairAccessible = true;
+
+                    // check for bicycle=no, otherwise assume it's OK to take a bike
+                    if (node.isTagFalse("bicycle")) {
+                        permission = StreetTraversalPermission.PEDESTRIAN;
+                    }   
+
+                    // check for wheelchair=no
+                    if (node.isTagFalse("wheelchair")) {
+                        wheelchairAccessible = false;
+                    }
+
+                    // The narrative won't be strictly correct, as it will show the elevator as part
+                    // of the cycling leg, but I think most cyclists will figure out that they 
+                    // should really dismount.
+                    ElevatorHopEdge theEdge = new ElevatorHopEdge(from, to, permission);
+                    ElevatorHopEdge backEdge = new ElevatorHopEdge(to, from, permission);
+
+                    theEdge.wheelchairAccessible = wheelchairAccessible;
+                    backEdge.wheelchairAccessible = wheelchairAccessible;
+
+                    graph.addEdge(theEdge);
+                    graph.addEdge(backEdge);
+                }
+            }
+
             /* unify turn restrictions */
             Map<Edge, TurnRestriction> turnRestrictions = new HashMap<Edge, TurnRestriction>();
             for (TurnRestriction restriction : turnRestrictionsByTag.values()) {
@@ -344,7 +593,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
          */
         private void applyBikeSafetyFactor(Graph graph) {
             _log.info(GraphBuilderAnnotation.register(graph, Variety.GRAPHWIDE, 
-            		"Multiplying all bike safety values by " + (1 / bestBikeSafety)));
+                    "Multiplying all bike safety values by " + (1 / bestBikeSafety)));
             HashSet<Edge> seenEdges = new HashSet<Edge>();
             for (Vertex vertex : graph.getVertices()) {
                 for (Edge e : vertex.getOutgoing()) {
@@ -406,7 +655,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
             /* Currently only type=route;route=road relations are handled */
             if (!(relation.isTag("type", "restriction"))
                     && !(relation.isTag("type", "route") && relation.isTag("route", "road"))
-                    && !(relation.isTag("type", "multipolygon") && relation.hasTag("highway"))) {
+                    && !(relation.isTag("type", "multipolygon") && relation.hasTag("highway"))
+                    && !(relation.isTag("type", "level_map"))) {
                 return;
             }
 
@@ -438,7 +688,7 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
         }
 
         /**
-         * Copies useful metadata from relations to the relavant ways/nodes.
+         * Copies useful metadata from relations to the relevant ways/nodes.
          */
         private void processRelations() {
             _log.debug("Processing relations...");
@@ -446,6 +696,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
             for (OSMRelation relation : _relations.values()) {
                 if (relation.isTag("type", "restriction")) {
                     processRestriction(relation);
+                } else if (relation.isTag("type", "level_map")) {
+                    processLevelMap(relation);
                 } else {
                     processRoad(relation);
                 }
@@ -485,8 +737,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 }
             }
             if (from == -1 || to == -1 || via == -1) {
-            	_log.warn(GraphBuilderAnnotation.register(
-            			graph, Variety.TURN_RESTRICTION_BAD, relation.getId()));
+                _log.warn(GraphBuilderAnnotation.register(
+                        graph, Variety.TURN_RESTRICTION_BAD, relation.getId()));
                 return;
             }
 
@@ -498,8 +750,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         modes.remove(TraverseMode.CAR);
                     } else if (m.equals("bicycle")) {
                         modes.remove(TraverseMode.BICYCLE);
-                    	_log.warn(GraphBuilderAnnotation.register(
-                    			graph, Variety.TURN_RESTRICTION_EXCEPTION, via, from));
+                        _log.warn(GraphBuilderAnnotation.register(
+                                graph, Variety.TURN_RESTRICTION_EXCEPTION, via, from));
                     }
                 }
             }
@@ -521,8 +773,8 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
             } else if (relation.isTag("restriction", "only_left_turn")) {
                 tag = new TurnRestrictionTag(via, TurnRestrictionType.ONLY_TURN);
             } else {
-            	_log.warn(GraphBuilderAnnotation.register(
-            			graph, Variety.TURN_RESTRICTION_UNKNOWN, relation.getTag("restriction")));
+                _log.warn(GraphBuilderAnnotation.register(
+                        graph, Variety.TURN_RESTRICTION_UNKNOWN, relation.getTag("restriction")));
                 return;
             }
             TurnRestriction restriction = new TurnRestriction();
@@ -535,6 +787,141 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
 
         }
 
+        /**
+         * Process an OSM level map.
+         * @param relation
+         */
+        private void processLevelMap(OSMRelation relation) {
+            ArrayList<String> levels = new ArrayList<String>();
+
+            // This stores the mapping from level keys to the full level values
+            HashMap<String, String> levelFullNames = new HashMap<String, String>();
+
+            int levelDelta = 0;
+
+            /* 
+             * parse all of the levels
+             * this array is ordered
+             * this is a little different than the OpenStreetMap levels notation,
+             * because the lowest level of a building (basement or whatever) is
+             * always otp:numeric_level 0. This is OK, as otp:numeric_level tags
+             * are *always* accompanied by otp:human_level tags that give the actual
+             * name of the level; otp:numeric_level is used only for relative
+             * position, and should *never* be shown to the user. To make things more understandable
+             * we try to find a delta to compensate and put the basement where it should be, but
+             * this data should never be displayed to the user or mixed with OSM levels
+             * from elsewhere. It's possible we wouldn't find a delta (imagine 
+             * levels=Garage;Basement;Lobby;Sky Bridge;Roof), but this is OK. 
+             */
+        
+            Pattern isRange = Pattern.compile("^[0-9]+\\-[0-9]+$");
+            Matcher m;
+
+            for (String level : relation.getTag("levels").split(";")) {
+                // split out ranges
+                m = isRange.matcher(level);
+                if (m.matches()) {
+                    String[] range = level.split("-");
+                    int endOfRange = Integer.parseInt(range[1]);
+                    for (int i = Integer.parseInt(range[0]); i <= endOfRange; 
+                             i++) {
+                        levels.add(Integer.toString(i));
+                    }
+                }
+                // not a range, just normal
+                else {
+                    levels.add(level);
+                }
+            }
+        
+            // try to get a best-guess delta between level order and level numbers, and fix up
+            // levels
+            for (int i = 0; i < levels.size(); i++) {
+                String level = levels.get(i);
+                // leaving it null gives NullPointerException when there is no matched 0 level
+                // making it 1 doesn't matter, since its only purpose is to be compared to 0
+                Integer numLevel = 1;
+                
+                // try to parse out the level number
+                try {
+                    numLevel = Integer.parseInt(level);
+                }
+                catch (NumberFormatException e) {
+                    try {
+                        numLevel = Integer.parseInt(level.split("=")[0]);
+                    }
+                    catch (NumberFormatException e2) {
+                        try {
+                            // http://stackoverflow.com/questions/1181969/java-get-last-element-after-split
+                            int lastInd = level.lastIndexOf('@');
+                            if (lastInd != -1) {
+                                numLevel = Integer.parseInt(level.substring(lastInd + 1));
+                            }
+                        }
+                        catch (NumberFormatException e3) {
+                            // do nothing
+                        }
+                    }
+                }
+        
+                if (numLevel == 0) {
+                    levelDelta = -1 * levels.indexOf(level);
+                }
+
+                String levelIndex;
+                String levelName;
+                // get just the human-readable level name from a name like T=Tunnel@-15
+                // first, discard elevation info
+                // don't use split, in case there is an @ in the level name; split on only the last
+                // one
+                int lastIndAt = level.lastIndexOf('@');
+                if (lastIndAt >= 1) {
+                    level = level.substring(0, lastIndAt);
+                }
+
+                // if it's there, discard the long name, but put it into a hashmap for retrieval
+                // below
+                // Why not just use the hashmap? Because we need the ordered ArrayList.
+                Integer levelSplit = level.indexOf('=');
+                if (levelSplit >= 1) {
+                    levelIndex = level.substring(0, levelSplit);
+                    levelName = level.substring(levelSplit + 1);
+                } else {
+                    // set them both the same, the @whatever has already been discarded
+                    levelIndex = levelName = level;
+                }
+
+                // overwrite for later indexing
+                levels.set(i, levelIndex);
+
+                // add to the HashMap
+                levelFullNames.put(levelIndex, levelName);
+            }
+    
+            for (OSMRelationMember member : relation.getMembers()) {
+                if ("way".equals(member.getType()) && _ways.containsKey(member.getRef())) {
+                    OSMWay way = _ways.get(member.getRef());
+                    if (way != null) {
+                        String role = member.getRole();
+       
+                        // this would indicate something more complicated than a single
+                        // level. Skip it.
+                        if (!relation.hasTag("role:" + role)) {
+
+                            if (levels.indexOf(role) != -1) {
+                                way.addTag("otp:numeric_level", 
+                                           Integer.toString(levels.indexOf(role) + levelDelta));
+                                way.addTag("otp:human_level", levelFullNames.get(role));
+                            }
+                            else {
+                                _log.warn(member.getRef() + " has undefined level " + role);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         private void processRoad(OSMRelation relation) {
             for (OSMRelationMember member : relation.getMembers()) {
                 if ("way".equals(member.getType()) && _ways.containsKey(member.getRef())) {
@@ -543,9 +930,9 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         if (relation.hasTag("name")) {
                             if (way.hasTag("otp:route_name")) {
                                 way.addTag(
-                                        "otp:route_name",
-                                        addUniqueName(way.getTag("otp:route_name"),
-                                                relation.getTag("name")));
+                                           "otp:route_name",
+                                           addUniqueName(way.getTag("otp:route_name"),
+                                                         relation.getTag("name")));
                             } else {
                                 way.addTag(new OSMTag("otp:route_name", relation.getTag("name")));
                             }
@@ -553,15 +940,15 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                         if (relation.hasTag("ref")) {
                             if (way.hasTag("otp:route_ref")) {
                                 way.addTag(
-                                        "otp:route_ref",
-                                        addUniqueName(way.getTag("otp:route_ref"),
-                                                relation.getTag("ref")));
+                                           "otp:route_ref",
+                                           addUniqueName(way.getTag("otp:route_ref"),
+                                                         relation.getTag("ref")));
                             } else {
                                 way.addTag(new OSMTag("otp:route_ref", relation.getTag("ref")));
                             }
                         }
                         if (relation.hasTag("highway") && relation.isTag("type", "multipolygon")
-                                && !way.hasTag("highway")) {
+                            && !way.hasTag("highway")) {
                             way.addTag("highway", relation.getTag("highway"));
                         }
                     }
@@ -833,6 +1220,74 @@ public class OpenStreetMapGraphBuilderImpl implements GraphBuilder {
                 return def;
 
             return permission;
+        }
+    
+        /**
+         * Is this a multi-level node that should be decomposed to multiple coincident nodes?
+         * Currently returns true only for elevators.
+         * @param node
+         * @return whether the node is multi-level
+         * @author mattwigway
+         */
+        private boolean isMultiLevelNode(OSMNode node) {
+            if (node.hasTag("highway") && "elevator".equals(node.getTag("highway"))) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        /**
+         * Record the level of the way for this node, e.g. if the way is at level 5, mark that this 
+         * node is active at level 5.
+         * @param the way that has the level
+         * @param the node to record for
+         * @author mattwigway
+         */
+        private void recordLevel(OSMWay way, OSMNode node) {
+            HashMap<Integer, String> levels;
+            int level = Integer.parseInt(way.getTag("otp:numeric_level"));
+            if (multiLevelNodesLevels.containsKey(node.getId())) {
+                levels = multiLevelNodesLevels.get(node.getId());
+            } else {
+                levels = new HashMap<Integer, String>();
+                multiLevelNodesLevels.put(node.getId(), levels);
+            }
+            
+            if (!levels.containsKey(level)) {
+                levels.put(level, way.getTag("otp:human_level"));
+            }
+            else if (!levels.get(level).equals(way.getTag("otp:human_level"))) {
+                throw new IllegalStateException("Multiple levels have the same " + 
+                                                "level number!");
+            }
+        }
+
+        /**
+         * Get a vertex label from a node and a way. The reason this has been abstracted is that
+         * the vertex label is "osm node x" except when there is an elevator or other
+         * Z-dimension discontinuity, when it is "osm node x_y", with y representing the
+         * OSM level or layer (level preferred).
+         * @param node  The node to fetch a label for.
+         * @param way  The way it is connected to (for fetching level information).
+         * @return label  The label for the graph vertex.
+         * @author mattwigway
+         */
+        private String getVertexLabelFromNode (OSMNode node, OSMWay way) {
+            String label;
+            
+            // If the node should be decomposed to multiple levels, append _level to the id
+            // use the numeric level because it is unique, the human level may not be (although
+            // it will likely lead to some head-scratching if it is not).
+            if (isMultiLevelNode(node)) {
+                label = "osm node " + node.getId() + "_" + 
+                    way.getTag("otp:numeric_level");
+            } else {
+                // assume all other ways are connected if they share a node
+                label = "osm node " + node.getId();
+            }
+            
+            return label;
         }
     }
 
