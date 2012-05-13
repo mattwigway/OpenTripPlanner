@@ -27,7 +27,7 @@ var mapboxURL = "http://{s}.tiles.mapbox.com/v3/mapbox.mapbox-streets/{z}/{x}/{y
 var OSMURL    = "http://{s}.mqcdn.com/tiles/1.0.0/osm/{z}/{x}/{y}.png";
 var aerialURL = "http://{s}.mqcdn.com/naip/{z}/{x}/{y}.png";
 
-var mapboxAttrib = "Tiles from <a href='http://mapbox.com/about/maps' target='_blank'>MapBox Streets</a>";
+var mapboxAttrib = "Tiles from <a href='http://mapbox.com/about/maps' target='_blank'>MapBox Streets</a>; Map data &copy; 2011 OpenStreetMap contributors";
 var mapboxLayer = new L.TileLayer(mapboxURL, 
 		{subdomains: ["a","b","c","d"], maxZoom: 16, attribution: mapboxAttrib});
 
