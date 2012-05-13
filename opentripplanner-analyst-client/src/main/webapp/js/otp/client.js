@@ -46,7 +46,8 @@ var flags = {
 
 var params = {
     layers: 'traveltime',
-    styles: 'mask',
+    // this is always left at gray; color schemes are done client-side
+    styles: 'gray',
     batch: true,
 };
 
@@ -70,8 +71,137 @@ var buildQuery = function(params) {
 	return "?" + ret.join('&');
 };
 
-var analystUrl = "/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
-var analystLayer = new L.TileLayer(analystUrl + buildQuery(params), {attribution: osmAttrib});
+// http://en.wikipedia.org/wiki/HSL_and_HSV#Converting_to_RGB
+var HSVtoRGB = function (h, s, v) {
+    var chroma = v*s;
+    var hprime = h/60;
+    var r_1, g_1, b_1;
+
+    var x = chroma * (1 - Math.abs(hprime % 2 - 1));
+
+    if (hprime < 1) {
+        r_1 = chroma;
+        g_1 = x;
+        b_1 = 0;
+    }
+    else if (hprime < 2) {
+        r_1 = x;
+        g_1 = chroma;
+        b_1 = 0;
+    }
+    else if (hprime < 3) {
+        r_1 = 0;
+        g_1 = chroma;
+        b_1 = x;
+    }
+    else if (hprime < 4) {
+        r_1 = 0;
+        g_1 = x;
+        b_1 = chroma;
+    }
+    else if (hprime < 5) {
+        r_1 = x;
+        g_1 = 0;
+        b_1 = chroma;
+    }
+    else if (hprime < 6) {
+        r_1 = chroma;
+        g_1 = 0;
+        b_1 = x;
+    }
+
+    var m = v - chroma;
+    var r = r_1 + m;
+    var g = g_1 + m;
+    var b = b_1 + m;
+
+    return [r, g, b]
+};
+        
+
+var colorSchemes = {};
+// ported from 
+//colorSchemes.mask
+
+/* Not yet working
+colorSchemes.color30 = function (value) {
+    var opacity = 148;
+    if (i >= 150)
+        return [0, 0, 0, opacity];
+    var v = 0.8;
+    
+    var s;
+    if (value % 30 < 28)
+        s = (value % 30) * .037;
+    else
+        s = (30 - (value % 30)) * .333;
+
+    var h;
+    if (value < 30)
+        h = 120; // green
+    else if (value < 60)
+        h = 240; // blue
+    else if (value < 90)
+        h = 52; // yellow
+    else if (value < 120)
+        h = 0; // red
+    else {
+        h = 0;
+        s = 0;
+        v = (29 - (value - 120)) * .0172;
+    }
+
+    var rgb = HSVtoRGB(h, s, v);
+    return [rgb[0]*255, rgb[1]*255, rgb[2]*255, opacity];
+}
+*/
+
+colorSchemes.log = function (val) {
+    // natural log scale, 5.5413 ~= ln 255
+    return [0, 0, 0, (Math.log(val)/5.5413)*255];
+};
+
+var analystUrl = "http://localhost:8080/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
+var analystLayerOpts = {url: analystUrl + buildQuery(params), style: 'log'};
+var analystLayer = new L.TileLayer.Canvas();
+
+// Draw a single tile
+analystLayer.drawTile = function (canvas, tileCoord, zoom) {
+    // load the image from the server
+    var rawTile = new Image();
+    rawTile.src = analystLayerOpts.url
+        .replace('{z}', zoom)
+        .replace('{x}', tileCoord.x)
+        .replace('{y}', tileCoord.y);
+
+    // Once the image has loaded, we can manipulate it
+    rawTile.onload = function () {
+
+        var ctx = canvas.getContext('2d');
+        // First draw the image, then modify it
+        ctx.drawImage(rawTile, 0, 0);
+
+        console.log('drew tile');
+
+        // now, transform
+        imageData = ctx.getImageData(0, 0, 256, 256);
+        
+        // read the value at each pixel and rewrite it
+        for (var i = 0; i < 256 * 256; i++) {
+            // get the red value; all the values should be the same for gray
+            var red = imageData.data[i * 4];
+            var rgba = colorSchemes[analystLayerOpts.style](red);
+
+            // write the values in, rgba
+            imageData.data[i * 4] = rgba[0];
+            imageData.data[i * 4 + 1] = rgba[1];
+            imageData.data[i * 4 + 2] = rgba[2];
+            imageData.data[i * 4 + 3] = rgba[3];
+        }
+        // write it back
+        ctx.putImageData(imageData, 0, 0);
+    }
+}
 
 var refresh = function () {
 	var o = origMarker.getLatLng();
@@ -91,13 +221,11 @@ var refresh = function () {
     }
     console.log(params);
     console.log(analystUrl + buildQuery(params));
-    // can we trigger refresh instead of removing?
-	if (analystLayer != null)
-		map.removeLayer(analystLayer);
-	analystLayer._url = analystUrl + buildQuery(params);
-    map.addLayer(analystLayer);
-	legend.src = "/opentripplanner-api-webapp/ws/legend.png?width=300&height=40&styles=" 
-		+ params.styles;
+    analystLayerOpts.url = analystUrl + buildQuery(params);
+    analystLayer.redraw();
+
+    legend.src = "/opentripplanner-api-webapp/ws/legend.png?width=300&height=40&styles=" 
+	+ params.styles;
 };
 
 // create geoJSON layers for DC Purple Line
