@@ -123,9 +123,9 @@ var colorSchemes = {};
 // ported from 
 //colorSchemes.mask
 
-/* Not yet working
+///* Not yet working
 colorSchemes.color30 = function (value) {
-    var opacity = 148;
+    var opacity = 96;
     if (i >= 150)
         return [0, 0, 0, opacity];
     var v = 0.8;
@@ -154,14 +154,14 @@ colorSchemes.color30 = function (value) {
     var rgb = HSVtoRGB(h, s, v);
     return [rgb[0]*255, rgb[1]*255, rgb[2]*255, opacity];
 }
-*/
+// */
 
 colorSchemes.log = function (val) {
     // natural log scale, 5.5413 ~= ln 255
     return [0, 0, 0, (Math.log(val)/5.5413)*255];
 };
 
-var analystUrl = "http://localhost:8080/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
+var analystUrl = "/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
 var analystLayerOpts = {url: analystUrl + buildQuery(params), style: 'log'};
 var analystLayer = new L.TileLayer.Canvas();
 
@@ -203,6 +203,29 @@ analystLayer.drawTile = function (canvas, tileCoord, zoom) {
     }
 }
 
+// draw the legend for the named style
+var drawLegend = function (style) {
+    var legend = document.getElementById('legend');
+    var ctx = legend.getContext('2d');
+    
+    // This will all be overwritten; current content does not matter
+    var singleRow = ctx.getImageData(0, 0, 256, 1);
+    
+    // fill in one row, copying bytes
+    for (var i = 0; i < 256; i++) {
+        var rgba = colorSchemes[style](i);
+        singleRow.data[i * 4] = rgba[0];
+        singleRow.data[i * 4 + 1] = rgba[1];
+        singleRow.data[i * 4 + 2] = rgba[2];
+        singleRow.data[i * 4 + 3] = rgba[3];
+    }
+
+    // Now, copy that row into the canvas 50 times
+    for (var i = 0; i < 50; i++) {
+        ctx.putImageData(singleRow, 0, i);
+    }
+}
+
 var refresh = function () {
 	var o = origMarker.getLatLng();
 	var d = destMarker.getLatLng();
@@ -224,8 +247,8 @@ var refresh = function () {
     analystLayerOpts.url = analystUrl + buildQuery(params);
     analystLayer.redraw();
 
-    legend.src = "/opentripplanner-api-webapp/ws/legend.png?width=300&height=40&styles=" 
-	+ params.styles;
+//    legend.src = "/opentripplanner-api-webapp/ws/legend.png?width=300&height=40&styles=" 
+//	+ params.styles;
 };
 
 // create geoJSON layers for DC Purple Line
