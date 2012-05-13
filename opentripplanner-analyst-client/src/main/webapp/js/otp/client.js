@@ -120,10 +120,9 @@ var HSVtoRGB = function (h, s, v) {
         
 
 var colorSchemes = {};
-// ported from 
-//colorSchemes.mask
 
-///* Not yet working
+// first few ported from Tile.java
+// This is the new color30
 colorSchemes.color30 = function (value) {
     var opacity = 96;
     if (i >= 150)
@@ -153,8 +152,32 @@ colorSchemes.color30 = function (value) {
 
     var rgb = HSVtoRGB(h, s, v);
     return [rgb[0]*255, rgb[1]*255, rgb[2]*255, opacity];
-}
-// */
+};
+
+colorSchemes.difference = function (val) {
+    if (val <= 117) {
+        // i = 117 - val algebraically
+        return [0, (117 - val) * 2, 0, (117 - val) * 2 + 64];
+    }
+    else if (val >= 137) {
+        return [(val - 117) * 2, 0, 0, (val - 117) * 2 + 64];
+    }
+    else return [0, 0, 0, 64];
+};
+
+colorSchemes.transparent = function (val) {
+    if (val < 60)
+        return [0, 0, 0, 240 - val * 4];
+    else return [0, 0, 0, 0];
+};
+
+colorSchemes.mask = function (val) {
+    var max = 90;
+    if (val < max)
+        return [0, 0, 0, val * 210 / 90];
+    else
+        return [0, 0, 0, 210];
+};
 
 colorSchemes.log = function (val) {
     // natural log scale, 5.5413 ~= ln 255
@@ -162,7 +185,7 @@ colorSchemes.log = function (val) {
 };
 
 var analystUrl = "/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
-var analystLayerOpts = {url: analystUrl + buildQuery(params), style: 'log'};
+var analystLayerOpts = {url: analystUrl + buildQuery(params), style: 'mask'};
 var analystLayer = new L.TileLayer.Canvas();
 
 // Draw a single tile
@@ -180,8 +203,6 @@ analystLayer.drawTile = function (canvas, tileCoord, zoom) {
         var ctx = canvas.getContext('2d');
         // First draw the image, then modify it
         ctx.drawImage(rawTile, 0, 0);
-
-        console.log('drew tile');
 
         // now, transform
         imageData = ctx.getImageData(0, 0, 256, 256);
@@ -247,8 +268,7 @@ var refresh = function () {
     analystLayerOpts.url = analystUrl + buildQuery(params);
     analystLayer.redraw();
 
-//    legend.src = "/opentripplanner-api-webapp/ws/legend.png?width=300&height=40&styles=" 
-//	+ params.styles;
+    drawLegend(analystLayerOpts.style);
 };
 
 // create geoJSON layers for DC Purple Line
@@ -366,7 +386,7 @@ destMarker.bindPopup("I am the destination.");
 
 map.addLayer(mapboxLayer);
 map.addLayer(origMarker);
-// do not add analyst layer yet -- it will be added in refresh() once params are pulled in
+map.addLayer(analystLayer);
 
 var layersControl = new L.Control.Layers(baseMaps, overlayMaps);
 map.addControl(layersControl);
@@ -384,33 +404,33 @@ var purpleOff = function () {
 };
 
 var color30 = function () {
-	params.layers = 'traveltime',
-	params.styles = 'color30',
+    params.layers = 'traveltime',
+    analystLayerOpts.style = 'color30',
     params.time = flags.startTime;
-	flags.twoEndpoint = false;
+    flags.twoEndpoint = false;
     refresh();
 };
 
 var gray = function () {
-	params.layers = 'traveltime',
-	params.styles = 'mask',
+    params.layers = 'traveltime',
+    analystLayerOpts.style = 'mask',
     params.time = flags.startTime;
-	flags.twoEndpoint = false;
+    flags.twoEndpoint = false;
     refresh();
 };
 
 var difference = function () {
-	params.layers = 'difference',
-	params.styles = 'difference',
+    params.layers = 'difference',
+    analystLayerOpts.style = 'difference',
     params.bannedRoutes = ["", "Test_Purple"];
     params.time = flags.startTime;
-	flags.twoEndpoint = false;
+    flags.twoEndpoint = false;
     refresh();
 };
 
 var hagerstrand = function () {
 	params.layers = 'hagerstrand',
-	params.styles = 'transparent',
+	analystLayerOpts.style = 'transparent',
     params.bannedRoutes = "";
 	params.time = [flags.startTime, flags.endTime],
 	flags.twoEndpoint = true;
