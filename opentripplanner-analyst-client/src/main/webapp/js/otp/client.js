@@ -187,6 +187,9 @@ colorSchemes.log = function (val) {
 var analystUrl = "/opentripplanner-api-webapp/ws/tile/{z}/{x}/{y}.png"; 
 var analystLayerOpts = {url: analystUrl + buildQuery(params), style: 'mask'};
 var analystLayer = new L.TileLayer.Canvas();
+// this keeps track of outstanding requests; when refresh is called they
+// are stopped
+var analystImages = [];
 
 // Draw a single tile
 analystLayer.drawTile = function (canvas, tileCoord, zoom) {
@@ -196,6 +199,9 @@ analystLayer.drawTile = function (canvas, tileCoord, zoom) {
         .replace('{z}', zoom)
         .replace('{x}', tileCoord.x)
         .replace('{y}', tileCoord.y);
+
+    // save it so it can be canceled if the user refreshed before it completes
+    analystImages.push(rawTile);
 
     // Once the image has loaded, we can manipulate it
     rawTile.onload = function () {
@@ -266,6 +272,16 @@ var refresh = function () {
     console.log(params);
     console.log(analystUrl + buildQuery(params));
     analystLayerOpts.url = analystUrl + buildQuery(params);
+    
+    // stop all outstanding requests
+    var imagesLen = analystImages.length;
+    for (var i = 0; i < imagesLen; i++) {
+        // clear the onLoad function
+        analystImages[i].onload = null;
+    }
+    // and erase them to avoid runaway memory usage
+    analystImages = [];
+
     analystLayer.redraw();
 
     drawLegend(analystLayerOpts.style);
