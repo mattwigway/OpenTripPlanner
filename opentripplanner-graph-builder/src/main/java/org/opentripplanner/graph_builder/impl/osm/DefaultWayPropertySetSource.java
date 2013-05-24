@@ -62,11 +62,13 @@ public class DefaultWayPropertySetSource implements WayPropertySetSource {
         /* PEDESTRIAN_AND_BICYCLE */
         setProperties(props, "highway=cycleway", StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE,
                 0.60, 0.60);
-        setProperties(props, "highway=path", StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE,
+        setProperties(props, "highway=path", StreetTraversalPermission.PEDESTRIAN,
                 0.75, 0.75);
         setProperties(props, "highway=pedestrian",
-                StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE, 0.90, 0.90);
-        setProperties(props, "highway=footway", StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE,
+                StreetTraversalPermission.PEDESTRIAN);
+        setProperties(props, "highway=pedestrian;area=yes",
+                StreetTraversalPermission.PEDESTRIAN);
+        setProperties(props, "highway=footway", StreetTraversalPermission.PEDESTRIAN,
                 1.1, 1.1);
         setProperties(props, "highway=bridleway", StreetTraversalPermission.PEDESTRIAN_AND_BICYCLE,
                 1.3, 1.3);
@@ -77,7 +79,7 @@ public class DefaultWayPropertySetSource implements WayPropertySetSource {
         setProperties(props, "highway=road", StreetTraversalPermission.ALL, 1, 1);
         setProperties(props, "highway=byway", StreetTraversalPermission.ALL, 1.3, 1.3);
         setProperties(props, "highway=track", StreetTraversalPermission.ALL, 1.3, 1.3);
-        setProperties(props, "highway=service", StreetTraversalPermission.ALL, 1.1, 1.1);
+        setProperties(props, "highway=service", StreetTraversalPermission.PEDESTRIAN);
         setProperties(props, "highway=residential", StreetTraversalPermission.ALL, 0.98, 0.98);
         setProperties(props, "highway=residential_link", StreetTraversalPermission.ALL, 0.98, 0.98);
         setProperties(props, "highway=tertiary", StreetTraversalPermission.ALL, 1, 1);
